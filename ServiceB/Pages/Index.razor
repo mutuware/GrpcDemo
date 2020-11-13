@@ -1,0 +1,199 @@
+﻿@page "/"
+@inject ServiceA.Greeter.GreeterClient Client;
+@using Grpc.Core
+@using System.Threading
+
+<h1>gRPC Demo</h1>
+
+<div class="row">
+    <p class="col-2">Unary</p>
+    <button class="btn-primary col-2" @onclick="Unary">Start</button>
+    <div>@unaryResponse</div>
+</div>
+
+<div class="row">
+    <p class="col-2">ServerStreaming</p>
+    <button class="btn-primary col-2" @onclick="StartServerStreaming">Start</button>
+    <button class="btn-danger col-2" @onclick="CancelServerStreaming">Cancel</button>
+    <div>@serverStreamingResponse</div>
+</div>
+
+<div class="row">
+    <p class="col-2">ClientStreaming</p>
+    <button class="btn-primary col-2" @onclick="StartClientStreaming">Start</button>
+    <button class="btn-warning col-2" @onclick="EndClientStreaming">End</button>
+    <button class="btn-danger col-2" @onclick="CancelClientStreaming">Cancel</button>
+    <input class="col-3" @bind="clientStreamingText" @oninput="ClientStreamingChanged" disabled="@clientStreamingDisabled" />
+    <div>@clientStreamingResponse</div>
+</div>
+
+<div class="row">
+    <p class="col-2">BiDirectionalStreaming</p>
+    <button class="btn-primary col-2" @onclick="StartBiDirectionalStreaming">Start</button>
+    <button class="btn-warning col-2" @onclick="EndBiDirectionalStreaming">End</button>
+    <button class="btn-danger col-2" @onclick="CancelBiDirectionalStreaming">Cancel</button>
+    <input class="col-3" @bind="biDirectionalStreamingText" @oninput="BiDirectionalStreamingChanged" disabled="@biDirectionalStreamingDisabled" />
+    <div>@biDirectionalStreamingResponse</div>
+</div>
+
+@code
+{
+    string unaryResponse = "";
+    string serverStreamingResponse = "";
+
+    string clientStreamingText = "";
+    string clientStreamingResponse = "";
+    bool clientStreamingDisabled = true;
+
+    string biDirectionalStreamingText = "";
+    string biDirectionalStreamingResponse = "";
+    bool biDirectionalStreamingDisabled = true;
+    Task readTask;
+
+    CancellationTokenSource serverStreamingCts;
+    CancellationTokenSource clientStreamingCts;
+    CancellationTokenSource biDirectionalStreamingCts;
+
+    AsyncClientStreamingCall<ServiceA.HelloRequest, ServiceA.HelloReply> clientStreamingCall;
+    AsyncDuplexStreamingCall<ServiceA.HelloRequest, ServiceA.HelloReply> duplexStreamingCall;
+
+    public async Task Unary()
+    {
+        unaryResponse = "";
+        StateHasChanged();
+        var reply = await Client.SayHelloAsync(new ServiceA.HelloRequest { Name = "ServiceB" });
+        unaryResponse = reply.Message;
+    }
+
+    public async Task StartServerStreaming()
+    {
+        try
+        {
+            serverStreamingResponse = "";
+            StateHasChanged();
+
+            serverStreamingCts = new();
+            var options = new CallOptions(cancellationToken: serverStreamingCts.Token);
+
+            var call = Client.SayHellos(new ServiceA.HelloRequest { Name = "ServiceB" }, options);
+
+            await foreach (var response in call.ResponseStream.ReadAllAsync())
+            {
+                serverStreamingResponse += response.Message;
+                StateHasChanged();
+            }
+        }
+        catch (RpcException e) when (e.Status.StatusCode == StatusCode.Cancelled)
+        {
+            System.Diagnostics.Debug.WriteLine("Server Streaming was cancelled from the client!");
+        }
+    }
+
+    public void CancelServerStreaming()
+    {
+        serverStreamingCts.Cancel();
+    }
+
+
+    public async Task StartClientStreaming()
+    {
+        try
+        {
+            clientStreamingResponse = "";
+            clientStreamingText = "";
+            clientStreamingDisabled = false;
+            StateHasChanged();
+
+            clientStreamingCts = new();
+
+
+            clientStreamingCall = Client.StreamingFromClient(cancellationToken: clientStreamingCts.Token);
+
+            var response = await clientStreamingCall;
+            clientStreamingResponse = response.Message;
+        }
+        catch (RpcException e) when (e.Status.StatusCode == StatusCode.Cancelled)
+        {
+            Console.WriteLine("Client Streaming was cancelled from the client!");
+        }
+    }
+
+    public async Task ClientStreamingChanged(ChangeEventArgs e)
+    {
+        if (clientStreamingCall is null) return;
+
+        var input = e.Value.ToString()[^1]; // last digit
+        await clientStreamingCall.RequestStream.WriteAsync(new ServiceA.HelloRequest { Name = input.ToString() });
+        StateHasChanged(); // update UI with response
+    }
+
+    public async Task EndClientStreaming()
+    {
+        clientStreamingDisabled = true;
+        await clientStreamingCall.RequestStream.CompleteAsync();
+    }
+
+    public void CancelClientStreaming()
+    {
+        clientStreamingDisabled = true;
+        clientStreamingCts.Cancel();
+    }
+
+
+    public void StartBiDirectionalStreaming()
+    {
+        try
+        {
+            biDirectionalStreamingResponse = "";
+            biDirectionalStreamingText = "";
+            biDirectionalStreamingDisabled = false;
+            StateHasChanged();
+
+            biDirectionalStreamingCts = new();
+
+
+            var options = new CallOptions { };
+            duplexStreamingCall = Client.StreamingBothWays(options);
+
+            //var response = await call2;
+            //biDirectionalStreamingResponse = response.Message;
+
+            // read from stream on background task
+            readTask = Task.Run(async () =>
+            {
+                await foreach (var response in duplexStreamingCall.ResponseStream.ReadAllAsync())
+                {
+                    biDirectionalStreamingResponse += response.Message;
+                    await InvokeAsync(StateHasChanged); // update UI (but from background different thread)
+            }
+            });
+
+        }
+        catch (RpcException e) when (e.Status.StatusCode == StatusCode.Cancelled)
+        {
+            Console.WriteLine("BiDirectional Streaming was cancelled from the client!");
+        }
+    }
+
+    public async Task BiDirectionalStreamingChanged(ChangeEventArgs e)
+    {
+        if (duplexStreamingCall is null) return;
+
+        var input = e.Value.ToString()[^1]; // last digit
+
+        // write to stream
+        await duplexStreamingCall.RequestStream.WriteAsync(new ServiceA.HelloRequest { Name = input.ToString() });
+    }
+
+    public async Task EndBiDirectionalStreaming()
+    {
+        biDirectionalStreamingDisabled = true;
+        await duplexStreamingCall.RequestStream.CompleteAsync();
+    }
+
+    public void CancelBiDirectionalStreaming() // cts not supported?
+    {
+        biDirectionalStreamingDisabled = true;
+        biDirectionalStreamingCts.Cancel();
+    }
+}
