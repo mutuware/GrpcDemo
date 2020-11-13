@@ -34,6 +34,6 @@ The service methods are overridden to provide the actual [implementation](Servic
 
 # Links
 
-[MS Docs](https://docs.microsoft.com/en-us/aspnet/core/grpc/?view=aspnetcore-5.0)
+[MS Docs](https://docs.microsoft.com/en-us/aspnet/core/grpc/?view=aspnetcore-5.0)  
 [Proto3 Language Defiintion](https://developers.google.com/protocol-buffers/docs/proto3)
 
